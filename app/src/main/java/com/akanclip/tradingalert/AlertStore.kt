@@ -26,7 +26,11 @@ class AlertStore(context: Context) {
     fun addHistory(text: String) {
         val old = prefs.getStringSet("history", emptySet()).orEmpty().toMutableSet()
         old.add("${System.currentTimeMillis()}~$text")
-        prefs.edit().putStringSet("history", old.takeLast(100).toSet()).apply()
+        val latest = old
+            .sortedBy { it.substringBefore("~").toLongOrNull() ?: 0L }
+            .takeLast(100)
+            .toSet()
+        prefs.edit().putStringSet("history", latest).apply()
     }
 
     fun loadHistory(): List<String> = prefs.getStringSet("history", emptySet()).orEmpty()
