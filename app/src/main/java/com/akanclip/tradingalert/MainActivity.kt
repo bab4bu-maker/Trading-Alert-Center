@@ -2,6 +2,7 @@ package com.akanclip.tradingalert
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -13,6 +14,8 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.*
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -55,17 +58,18 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(6, 8, 6, 12)
         }
-        nav.addView(navButton("Dashboard") { showDashboard() }, LinearLayout.LayoutParams(0, -2, 1f))
-        nav.addView(navButton("Alerts") { showAlerts() }, LinearLayout.LayoutParams(0, -2, 1f))
-        nav.addView(navButton("History") { showHistory() }, LinearLayout.LayoutParams(0, -2, 1f))
-        nav.addView(navButton("Settings") { showSettings() }, LinearLayout.LayoutParams(0, -2, 1f))
+        nav.addView(navButton("HOME") { showDashboard() }, LinearLayout.LayoutParams(0, -2, 1f))
+        nav.addView(navButton("ALERTS") { showAlerts() }, LinearLayout.LayoutParams(0, -2, 1f))
+        nav.addView(navButton("HISTORY") { showHistory() }, LinearLayout.LayoutParams(0, -2, 1f))
+        nav.addView(navButton("SETTINGS") { showSettings() }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(nav)
         return root
     }
 
     private fun navButton(label: String, click: () -> Unit) = Button(this).apply {
         text = label
-        textSize = 11f
+        textSize = 10f
+        isSingleLine = true
         setOnClickListener { click() }
     }
 
@@ -92,30 +96,46 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun addStatusText() {
+        val connected = store.isBridgeConnected()
+        content.addView(TextView(this).apply {
+            text = if (connected) "🟢 MT5 CONNECTED" else "🔴 MT5 DISCONNECTED"
+            textSize = 20f
+            setTextColor(if (connected) Color.rgb(110, 220, 130) else Color.rgb(255, 130, 130))
+            setPadding(0, 8, 0, 12)
+        })
+    }
+
     private fun showDashboard() {
         clear("Dashboard")
         val rules = store.loadRules()
-        val bridge = store.getBridgeUrl()
-        addText(if (bridge.isBlank()) "MT5 Bridge: ⚪ Not configured" else "MT5 Bridge: 🟡 URL saved")
+        addStatusText()
         addText("Active alerts: ${rules.count { it.enabled }}")
-        addText("\nHow it works:", 18f)
-        addText("1. Create an alert\n2. Choose what to monitor\n3. Save it\n4. MT5 bridge will trigger the notification when connected")
+        addText("Last connection check: ${store.getLastBridgeCheck()}", 13f)
 
-        val create = Button(this).apply {
+        if (!store.isBridgeConnected()) {
+            content.addView(Button(this).apply {
+                text = "CONNECT MT5"
+                setOnClickListener { connectBridge() }
+            })
+        }
+
+        content.addView(Button(this).apply {
             text = "+ CREATE ALERT"
             setOnClickListener { showCreateAlert() }
-        }
-        content.addView(create)
+        })
 
-        val test = Button(this).apply {
+        content.addView(Button(this).apply {
             text = "TEST NOTIFICATION"
             setOnClickListener {
                 sendNotification("Test Alert", "XAUUSD M5 • RSI 29.4 • Demo notification")
                 store.addHistory(now() + "  Test Alert • XAUUSD M5")
                 Toast.makeText(this@MainActivity, "Test notification sent", Toast.LENGTH_SHORT).show()
             }
-        }
-        content.addView(test)
+        })
+
+        addText("\nSimple flow", 18f)
+        addText("Create alert → Connect MT5 → leave the app → receive notifications.")
 
         if (rules.isNotEmpty()) {
             addText("\nRecent alerts", 18f)
@@ -157,7 +177,7 @@ class MainActivity : Activity() {
 
     private fun showCreateAlert() {
         clear("Create Alert")
-        addText("Treat it like creating an alarm on your phone.")
+        addText("Choose what should trigger the alarm.")
 
         val type = Spinner(this)
         val types = listOf("PRICE", "RSI", "POSITION_OPEN", "POSITION_CLOSE", "SL_HIT", "TP_HIT", "FLOATING_PROFIT", "FLOATING_LOSS")
@@ -168,23 +188,44 @@ class MainActivity : Activity() {
         symbol.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("XAUUSD", "GBPUSD", "BTCUSD", "EURUSD", "USDJPY"))
         content.addView(label("Symbol")); content.addView(symbol)
 
+        val timeframeLabel = label("Timeframe")
         val timeframe = Spinner(this)
         timeframe.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("M1", "M5", "M15", "M30", "H1", "H4"))
-        content.addView(label("Timeframe")); content.addView(timeframe)
+        content.addView(timeframeLabel); content.addView(timeframe)
 
+        val operatorLabel = label("Condition")
         val operator = Spinner(this)
         operator.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf(">=", "<=", "Cross Up", "Cross Down", "Touch"))
-        content.addView(label("Condition")); content.addView(operator)
+        content.addView(operatorLabel); content.addView(operator)
 
+        val valueLabel = label("Value")
         val value = EditText(this).apply {
             hint = "Example: 30 or 3650.50"
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
         }
-        content.addView(label("Value")); content.addView(value)
+        content.addView(valueLabel); content.addView(value)
 
-        addText("For Position Open/Close and SL/TP alerts, Value is optional.", 13f)
+        fun refreshFields() {
+            val selected = type.selectedItem?.toString() ?: "PRICE"
+            val marketLevel = selected == "PRICE" || selected == "RSI"
+            val floating = selected == "FLOATING_PROFIT" || selected == "FLOATING_LOSS"
+            timeframeLabel.visibility = if (marketLevel) View.VISIBLE else View.GONE
+            timeframe.visibility = if (marketLevel) View.VISIBLE else View.GONE
+            operatorLabel.visibility = if (marketLevel || floating) View.VISIBLE else View.GONE
+            operator.visibility = if (marketLevel || floating) View.VISIBLE else View.GONE
+            valueLabel.visibility = if (marketLevel || floating) View.VISIBLE else View.GONE
+            value.visibility = if (marketLevel || floating) View.VISIBLE else View.GONE
+        }
+
+        type.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = refreshFields()
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+        refreshFields()
+
+        addText("Position Open/Close and SL/TP alerts do not need a numeric value.", 13f)
 
         content.addView(Button(this).apply {
             text = "SAVE ALERT"
@@ -198,8 +239,8 @@ class MainActivity : Activity() {
                 val rule = AlertRule(
                     type = selectedType,
                     symbol = symbol.selectedItem.toString(),
-                    timeframe = timeframe.selectedItem.toString(),
-                    operator = operator.selectedItem.toString(),
+                    timeframe = if (selectedType in listOf("PRICE", "RSI")) timeframe.selectedItem.toString() else "-",
+                    operator = if (needsValue) operator.selectedItem.toString() else "EVENT",
                     value = value.text.toString().trim()
                 )
                 store.saveRule(rule)
@@ -218,24 +259,111 @@ class MainActivity : Activity() {
 
     private fun showSettings() {
         clear("Settings")
-        addText("MT5 Bridge URL")
+        addStatusText()
+        addText("Last check: ${store.getLastBridgeCheck()}", 13f)
+
+        content.addView(Button(this).apply {
+            text = if (store.isBridgeConnected()) "RECHECK CONNECTION" else "CONNECT MT5"
+            setOnClickListener { connectBridge() }
+        })
+
+        if (store.isBridgeConnected()) {
+            content.addView(Button(this).apply {
+                text = "DISCONNECT"
+                setOnClickListener {
+                    store.setBridgeConnected(false)
+                    store.setLastBridgeCheck(now() + " • disconnected manually")
+                    showSettings()
+                }
+            })
+        }
+
+        content.addView(Button(this).apply {
+            text = "TEST NOTIFICATION"
+            setOnClickListener {
+                sendNotification("Trading Alert Center", "Notifications are working correctly.")
+                Toast.makeText(this@MainActivity, "Notification test sent", Toast.LENGTH_SHORT).show()
+            }
+        })
+
+        addText("\nWhat can MT5 send?", 18f)
+        addText("• Position Open / Close\n• SL / TP Hit\n• Price Level\n• RSI Level\n• Floating Profit / Loss")
+
+        content.addView(Button(this).apply {
+            text = "ADVANCED CONNECTION"
+            setOnClickListener { showAdvancedBridgeSetup() }
+        })
+
+        addText("\nVersion 0.2.0\nThe app side is ready for a simple Connect MT5 flow. Live alerts still require the MT5 bridge/server module to be running.", 13f)
+    }
+
+    private fun showAdvancedBridgeSetup() {
+        clear("Advanced Connection")
+        addText("Only use this screen when the MT5 bridge/server is available. Normally you should only need CONNECT MT5.")
+        addText("Bridge address", 14f)
         val input = EditText(this).apply {
-            hint = "https://your-server.example/api"
+            hint = "https://bridge-server.example/api"
             setText(store.getBridgeUrl())
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
         }
         content.addView(input)
         content.addView(Button(this).apply {
-            text = "SAVE CONNECTION"
+            text = "SAVE BRIDGE ADDRESS"
             setOnClickListener {
-                store.setBridgeUrl(input.text.toString().trim())
-                Toast.makeText(this@MainActivity, "Connection setting saved", Toast.LENGTH_SHORT).show()
+                val address = input.text.toString().trim()
+                store.setBridgeUrl(address)
+                store.setLastBridgeCheck("Not checked after address change")
+                Toast.makeText(this@MainActivity, "Bridge address saved", Toast.LENGTH_SHORT).show()
+                showSettings()
             }
         })
-        addText("\nTrade notifications planned for bridge:", 18f)
-        addText("• Position Open\n• Position Close\n• SL Hit\n• TP Hit\n• Price Level\n• RSI Level\n• Floating Profit/Loss")
-        addText("\nVersion 0.1 stores alert rules locally. The MT5 bridge/server is the next module that makes market alerts live while the phone is away from MT5.", 13f)
+        content.addView(Button(this).apply {
+            text = "BACK TO SETTINGS"
+            setOnClickListener { showSettings() }
+        })
+    }
+
+    private fun connectBridge() {
+        val address = store.getBridgeUrl().trim()
+        if (address.isBlank()) {
+            AlertDialog.Builder(this)
+                .setTitle("MT5 Bridge not paired yet")
+                .setMessage("The app is ready, but the PC/MT5 bridge module still needs to be installed. Once that module is running, CONNECT MT5 will check the connection. Advanced Connection is only for manual bridge setup.")
+                .setPositiveButton("ADVANCED") { _, _ -> showAdvancedBridgeSetup() }
+                .setNegativeButton("OK", null)
+                .show()
+            return
+        }
+
+        Toast.makeText(this, "Checking MT5 bridge…", Toast.LENGTH_SHORT).show()
+        Thread {
+            var connected = false
+            try {
+                val connection = URL(address).openConnection() as HttpURLConnection
+                connection.connectTimeout = 4000
+                connection.readTimeout = 4000
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("Accept", "application/json,text/plain,*/*")
+                connected = connection.responseCode in 200..399
+                connection.disconnect()
+            } catch (_: Exception) {
+                connected = false
+            }
+
+            runOnUiThread {
+                store.setBridgeConnected(connected)
+                store.setLastBridgeCheck(now() + if (connected) " • connected" else " • failed")
+                if (connected) {
+                    store.addHistory(now() + "  MT5 Bridge connected")
+                    Toast.makeText(this@MainActivity, "MT5 connected", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Could not reach MT5 bridge", Toast.LENGTH_LONG).show()
+                }
+                showSettings()
+            }
+        }.start()
     }
 
     private fun label(text: String) = TextView(this).apply {
