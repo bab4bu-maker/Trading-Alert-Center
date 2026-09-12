@@ -37,6 +37,20 @@ class AlertStore(context: Context) {
         .sortedByDescending { it.substringBefore("~").toLongOrNull() ?: 0L }
         .map { it.substringAfter("~", it) }
 
-    fun setBridgeUrl(url: String) = prefs.edit().putString("bridge_url", url).apply()
+    fun setBridgeUrl(url: String) {
+        prefs.edit()
+            .putString("bridge_url", url)
+            .putBoolean("bridge_connected", false)
+            .apply()
+    }
+
     fun getBridgeUrl(): String = prefs.getString("bridge_url", "") ?: ""
+
+    fun setBridgeConnected(connected: Boolean) =
+        prefs.edit().putBoolean("bridge_connected", connected).apply()
+
+    fun isBridgeConnected(): Boolean = prefs.getBoolean("bridge_connected", false)
+
+    fun setLastBridgeCheck(text: String) = prefs.edit().putString("bridge_last_check", text).apply()
+    fun getLastBridgeCheck(): String = prefs.getString("bridge_last_check", "Never checked") ?: "Never checked"
 }
