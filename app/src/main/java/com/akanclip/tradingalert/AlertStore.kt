@@ -8,6 +8,7 @@ class AlertStore(context: Context) {
     fun loadRules(): MutableList<AlertRule> {
         return prefs.getStringSet("rules", emptySet()).orEmpty()
             .mapNotNull(AlertRule::decode)
+            .filter { it.type in AlertRule.supportedTypes }
             .sortedByDescending { it.id }
             .toMutableList()
     }
@@ -20,7 +21,11 @@ class AlertStore(context: Context) {
 
     fun deleteRule(id: Long) {
         val rules = loadRules().filterNot { it.id == id }
-        prefs.edit().putStringSet("rules", rules.map { it.encode() }.toSet()).apply()
+        prefs.edit()
+            .putStringSet("rules", rules.map { it.encode() }.toSet())
+            .remove("trigger_state_$id")
+            .remove("trigger_stamp_$id")
+            .apply()
     }
 
     fun addHistory(text: String) {
@@ -28,7 +33,7 @@ class AlertStore(context: Context) {
         old.add("${System.currentTimeMillis()}~$text")
         val latest = old
             .sortedBy { it.substringBefore("~").toLongOrNull() ?: 0L }
-            .takeLast(100)
+            .takeLast(150)
             .toSet()
         prefs.edit().putStringSet("history", latest).apply()
     }
@@ -37,20 +42,21 @@ class AlertStore(context: Context) {
         .sortedByDescending { it.substringBefore("~").toLongOrNull() ?: 0L }
         .map { it.substringAfter("~", it) }
 
-    fun setBridgeUrl(url: String) {
-        prefs.edit()
-            .putString("bridge_url", url)
-            .putBoolean("bridge_connected", false)
-            .apply()
-    }
+    fun setApiKey(key: String) = prefs.edit().putString("twelve_data_api_key", key.trim()).apply()
+    fun getApiKey(): String = prefs.getString("twelve_data_api_key", "") ?: ""
 
-    fun getBridgeUrl(): String = prefs.getString("bridge_url", "") ?: ""
+    fun setMonitoring(active: Boolean) = prefs.edit().putBoolean("monitoring_active", active).apply()
+    fun isMonitoring(): Boolean = prefs.getBoolean("monitoring_active", false)
 
-    fun setBridgeConnected(connected: Boolean) =
-        prefs.edit().putBoolean("bridge_connected", connected).apply()
+    fun setLastMarketStatus(text: String) = prefs.edit().putString("market_last_status", text).apply()
+    fun getLastMarketStatus(): String = prefs.getString("market_last_status", "Belum ada data") ?: "Belum ada data"
 
-    fun isBridgeConnected(): Boolean = prefs.getBoolean("bridge_connected", false)
+    fun setLastPrice(price: String) = prefs.edit().putString("market_last_price", price).apply()
+    fun getLastPrice(): String = prefs.getString("market_last_price", "-") ?: "-"
 
-    fun setLastBridgeCheck(text: String) = prefs.edit().putString("bridge_last_check", text).apply()
-    fun getLastBridgeCheck(): String = prefs.getString("bridge_last_check", "Never checked") ?: "Never checked"
+    fun getTriggerState(id: Long): Boolean = prefs.getBoolean("trigger_state_$id", false)
+    fun setTriggerState(id: Long, state: Boolean) = prefs.edit().putBoolean("trigger_state_$id", state).apply()
+
+    fun getTriggerStamp(id: Long): String = prefs.getString("trigger_stamp_$id", "") ?: ""
+    fun setTriggerStamp(id: Long, stamp: String) = prefs.edit().putString("trigger_stamp_$id", stamp).apply()
 }
